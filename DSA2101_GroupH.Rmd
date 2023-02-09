@@ -1,0 +1,346 @@
+---
+title: "DSA2101 Group Project"
+output:
+  output: html_document
+  df_print: paged
+---
+<style>
+body {
+text-align: justify}
+</style>
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, tidy = TRUE, fig.align = "center")
+```
+
+## Co-existing with Volcanoes
+
+By Group H
+
+Name and matriculation number of team members:
+
+Name | Matriculation number
+---- | ----
+Bryan Lee Guang Zhe | A0216339A
+Choo Wei Jie Darren | A0216214U
+Chong Wan Fei | A0222419L
+Han Jiaxu | A0216256H
+Koh Long Yang | A0216194E
+
+## Introduction
+In this project, we want to explore the various effects of volcanic activity on human activities and the natural world around it.  
+Since volcano activities aren’t man-made disasters, nor are they necessarily exacerbated by human activities, it would be interesting to see how it has affected humans, their actions and the natural world.  
+Thus, the questions we want to answer are **“Why people still choose to live near active volcanoes?”** and **“How significant is the cooling effect of volcanic eruptions?”**.
+
+
+## Data Description  
+The data used in this project is the Volcano Eruptions dataset from the tidytuesday repository. More specifically, it originated from The Smithsonian Institution.  
+
+The dataset includes the csv files which resulted in the tables: volcano, eruptions, events, tree_rings, and sulfur.  
+It contains information on almost all the volcanoes in the world, where each volcano is uniquely tagged together with the duration of eruption. With advancement in technology and more new techniques being developed, such as radiocarbon-dating and radioactive decay analysis to ice and tree analysis, even eruptions from thousands of years ago can be recorded with high levels of certainty. Furthermore, the Volcano Explosivity Index (VEI) was also measured, which is the relative measure of the explosiveness of volcanic eruptions, ranging from 0 being non-explosive eruptions, ejecting 10^4^ m^3^ of volcanic mass, to the highest ever recorded of 8 ejecting more than 1000 km^3^ of volcanic mass.  
+
+The volcanic data was generally quite clean to begin with, the only cleaning done to the various tables are: For ```eruptions```, the ```year```, ```month```, and ```day``` columns for the start and end date are combined into a single ```date```-type, followed  by removing the old columns, then, only those eruptions that were categorized as “Confirmed Eruption” are of interest to us. For ```volcanoes```, since there were many ```primary_volcano_type``` that refer to the same thing, those were re-named into its more general name (e.g. Stratovolcano(es) -> Stratovolcano). It was then further grouped by the different columns as needed.  
+The tables for ```sulfur``` and ```tree_rings``` did not have much columns to work with, hence, it was mostly just filtering to the specific years we want to focus on.
+
+
+#### Import libraries and data, data cleaning
+```{r import , warning=FALSE, message=FALSE}
+#Import
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(viridis)
+library(ggrepel)
+
+volcano <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-05-12/volcano.csv")
+eruptions <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-05-12/eruptions.csv")
+eruptions_original <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-05-12/eruptions.csv")
+events <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-05-12/events.csv")
+tree_rings <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-05-12/tree_rings.csv")
+sulfur <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-05-12/sulfur.csv")
+```
+
+```{r cleaning, warning=FALSE, message=FALSE}
+#getting world map
+world = map_data("world")
+
+#Cleaning
+##eruptions
+eruptions = eruptions %>%
+  mutate(start_date = make_date(start_year, start_month, start_day)) %>%
+  mutate(end_date = make_date(end_year, end_month, end_day)) %>% 
+  select(-c(7,8,9,11,12,13)) %>% 
+  filter(eruption_category == "Confirmed Eruption") %>% 
+  filter(!is.na(vei), !is.na(area_of_activity))
+
+##volcano
+volcano = volcano %>%
+  na.omit() %>%
+  filter(!last_eruption_year=="Unknown") %>%
+  mutate_at(vars(c("major_rock_2")), as.factor) %>%
+  mutate_at(vars(c("primary_volcano_type")), as.factor)
+
+df1 <- volcano %>%
+  transmute(
+    volcano_type = case_when(
+      str_detect(primary_volcano_type, "Stratovolcano") ~ "Stratovolcano",
+      str_detect(primary_volcano_type, "Shield") ~ "Shield",
+      str_detect(primary_volcano_type, "Caldera") ~ "Caldera",
+      FALSE ~ "Other"
+    ),
+    volcano_number, latitude, longitude, elevation,
+    tectonic_settings, major_rock_1, population_within_10_km, 
+    population_within_30_km, population_within_5_km,  population_within_100_km
+  ) %>%
+  mutate_if(is.character, factor) %>% na.omit()
+```
+
+```{r f11trans}
+#figure 1.1 transformations
+range_of_years = function(last_eruption_year) {
+  how_many_years_ago = 2022 - last_eruption_year
+  if (between(how_many_years_ago, 0, 10)) {
+    result = "within 10 years"
+  }
+  else if (between(how_many_years_ago, 11, 50)) {
+    result = ">10 years ago"
+  }
+  else if (between(how_many_years_ago, 51, 100)) {
+    result = ">50 years ago"
+  }
+  else if (between(how_many_years_ago, 101, 1000)) {
+    result = ">100 years ago"
+  }
+  else {
+    result = ">1000 years ago"
+  }
+  return (result)
+}
+
+inner_erupt_volc = inner_join(eruptions, volcano, by=c("volcano_number", "volcano_name", "latitude", "longitude")) 
+inner_erupt_volc$last_eruption_year = as.numeric(inner_erupt_volc$last_eruption_year)
+
+inner_erupt_volc = inner_erupt_volc %>%
+  transmute(
+    primary_volcano_type = case_when(
+      str_detect(primary_volcano_type, "Stratovolcano") ~ "Stratovolcano",
+      str_detect(primary_volcano_type, "Shield") ~ "Shield",
+      str_detect(primary_volcano_type, "Caldera") ~ "Caldera",
+      FALSE ~ "Other"
+    ), population_within_10_km, last_eruption_year, longitude, latitude) %>% 
+  filter(primary_volcano_type == c("Stratovolcano", "Shield", "Caldera"))
+
+year_range = as.numeric(inner_erupt_volc$last_eruption_year)
+last_eruption_range = sapply(year_range, range_of_years)
+
+inner_erupt_volc = inner_erupt_volc %>%
+  mutate(inner_erupt_volc, last_eruption_range)
+
+rangepop = inner_erupt_volc %>%
+  group_by(latitude, longitude, population_within_10_km, last_eruption_range) %>% 
+  mutate_at(c("last_eruption_range"), as.factor) %>% 
+  summarise(n=n())
+```
+
+```{r f12trans}
+#figure 1.2 transformations
+most_event = events %>%
+  filter(event_type != "VEI (Explosivity Index)" & !is.na(event_type)) %>%
+  select(volcano_number, event_type) %>% 
+  group_by(event_type) %>%
+  summarise(count=n()) %>%
+  arrange(desc(count)) %>%
+  head(n=5)
+
+df2 = events %>%
+  select(volcano_number, event_type) %>%
+  filter(event_type %in% most_event$event_type)
+
+df3 = full_join(df1, df2, by="volcano_number") %>%
+  na.omit() %>%
+  group_by(volcano_number) %>% distinct()
+
+df4 = df3 %>% group_by(volcano_type, event_type) %>%
+  summarise(n=n(), .groups = 'drop')
+```
+
+```{r f21trans}
+#figure 2.1 transformations
+tree_rings1900 = tree_rings %>%
+  filter(year>=1900)
+
+eruption_count = eruptions_original %>%
+  filter(start_year >= 1900, start_year <=2000) %>%
+  group_by(start_year) %>%
+  summarise(erupt_count = n())
+
+eruptions1900 = eruptions_original %>%
+  filter(start_year >= 1900, start_year <=2000) %>%
+  group_by(start_year) %>%
+  summarise(erupt_count = n()-30) 
+
+eruptions_vei = eruptions_original %>%
+  filter(start_year >= 1900, start_year <=2000) %>%
+  group_by(start_year) %>%
+  arrange(start_year) %>%
+  summarise(max_vei = max(vei))
+```
+
+```{r f22trans}
+#figure 2.2 transformations
+tree_rings_and_sulfur = tree_rings %>%
+  filter(year>=500, year<=705)
+
+sulfur_edited = sulfur %>%
+  na.omit() %>%
+  mutate(total=(neem+wdc)/100)
+```
+
+## Why do people still live around volcanoes, even though the volcanoes are still active?
+
+### Introduction
+
+In this question, we want to find out the interaction between humans and volcanoes, and possibly uncover some reasons as to why people would want to reside in volcanically active areas despite knowing the risk of a potential eruption. We are interested in the correlation between volcanoes and the number of people living in its vicinity, and also the types of volcanic activity that could show what the people are doing in reaction to various types of volcanic activities.  
+With Southeast Asia such as Indonesia and the Philippines being located on the Pacific Ring of Fire, the geographical location of Singapore puts the country at risk of being affected by the volcanic activities in these places as well. Especially with news of volcanic eruptions causing damage to the local communities, in particular the recent eruption of Mount Merapi in Indonesia, this piqued our interest in studying the correlation between volcanoes and the communities residing in its vicinity, as well as the types of volcanic activity that could show possible responses from the local population to various types of volcanic activities. From the dataset, we will be using ```primary_volcano_type``` and ```population_within_10_km``` column under the ```volcanoes``` table, ```start_date``` and ```end_date``` under the ```eruptions``` table, and ```event_type``` column under ```events```.  
+
+### Methodology
+
+In both figures, We primarily used volcanoes of the following types: “Stratovolcano'', “Shield”, and “Caldera”, as these are the top 3 most common primary types of volcanoes.
+
+In Figure 1.1, it is a map plot of our chosen primary volcano types and the various volcanoes' location on the world map, categorized by how long ago their last eruption was (in various colours), and their size being the population within 10km of their corresponding volcano. This plot gives us a basic understanding of the distribution of volcanoes around the world, and the relative number of people living near each volcano, furthermore, it also shows when each volcano last erupted, further giving an indication of how the volcanoes' activity might affect human activity. We used ```population_within_10_km``` since a radius of 10km from the volcano site would be a good indication of the local population and their activities around their respective volcanoes, without having that much population and activity overlap with another volcano
+
+In Figure 1.2, it is a histogram for the top 5 volcanic events against our chosen primary volcano types. The top 5 most common event types we used were – “Explosion”, “Lava flow”, “Phreatic Activity”, “Earthquakes”, “Ash” – since these are the most frequently occurring events for the volcanoes whereas the other event types occur an insignificant amount of times across the centuries. Used to further support Figure 1.1, this figure allows us to clearly see the association between primary volcano types and the events that it produces, as these events relate to the most common volcano type and people still choose to live near such volcanoes, it should have an impact on how people might react to various types of events.
+
+### Visualizations
+
+#### Figure 1.1
+```{r q1f1}
+fig11 = ggplot() + 
+  geom_map(data = world, map = world, 
+           aes(long, lat, map_id = region), color = "black", fill = "wheat", size = 0.1) +
+  geom_point(data = rangepop, 
+             aes(longitude, latitude, colour = last_eruption_range, size = population_within_10_km), 
+             position = "jitter", alpha = 0.5) +
+  scale_size(range=c(1,15)) +
+  theme_void() +
+  theme(legend.position = "right", legend.direction = "vertical") +
+  theme(legend.title=element_text(size = 7),
+        legend.text = element_text(size = 7)) +
+  ggtitle("Population within 10km of Stratovolcanoes, \nShields and Calderas and their last erupted period") +
+  theme(plot.title = element_text(hjust=0.5)) + 
+  scale_color_manual(values = c("red", "blue", "green", "grey", "black"))
+
+fig11
+
+```
+
+#### Figure 1.2
+```{r q1f2}
+fig12 = ggplot(df4, aes(volcano_type, n)) +
+  geom_col(aes(fill=event_type),
+           position="dodge") +
+  labs(title="Spread of events for each volcano type",
+       x="Primary Volcano Types",
+       y="Number of Volcanoes having such event") +
+  scale_fill_discrete(name="Event Type", 
+                      labels=c("Ash", "Earthquakes", "Explosion", "Lava flow", "Phreatic activity")) +
+  theme(legend.position="right", plot.title = element_text(hjust=0.5))
+
+fig12
+```
+
+### Discussions
+Firstly, from Figure 1.1, the map of the volcanoes shows the Pacific Ring of Fire, which outlines the Pacific Ocean and within this circumference, many of the volcanoes here had their last eruption year within 10 years ago. Despite that, there is still a sizable number of people living within 10km of these volcanoes.  
+Focusing on the equatorial region of the map, here seems to locate the most volcanoes with a large population living within 10km. The countries in these region also happen to correspond to crop-producing countries, such as Indonesia and Central America. To attempt to explain why such places still have high population within 10 km of the volcano, we turn to the events associated with the various volcano types. As seen from Figure 1.2, the 3 most common volcanic activities are Explosion, Ash and Lava flow, this indicates the expulsion of volcanic materials like lava, rocks, and ash, which contains high amounts of mineral from the Earth's mantle, when such debris settle onto the fields, it results in mineral-rich soils, which is ideal for agricultural activities, potentially increasing harvests. For the people who rely on the agricultural industry in such areas near volcanoes, they don't suffer the full destructive force of the volcano, yet able to reap the benefits of it in the long run. As such, there are still many who chose to continue living in such areas as the benefits of their agricultural practices heavily outweighs the cost of moving away from these mineral-rich lands.  
+
+Secondly, in certain countries with access to active volcanoes but unlikely to erupt, for example, European countries and Mexico, there has been a trend of offsetting their overall Carbon Dioxide emissions through finding greener energy alternatives compared to non-renewable energy such as burning fossil fuels (Masum and Akbar, 2019). One such alternative for these nations with access to active volcanoes that aren't likely to erupt is Geothermal Energy, the use of active volcanoes' heat to heat water to steam and subsequently producing energy. As seen from Figure 1.1, the volcanoes in the European region haven't erupted in more than 100 years, some more than 1000 years ago. This perhaps indicates to geologists and energy companies that these volcanoes, despite being active, would not erupt anytime in the near future (Antics and Sanner, 2007). Hence, the benefits of harnessing the thermal energy heavily outweighs the possibility of encountering a volcanic eruption.  
+
+Lastly, volcanoes provide a source of income to countries through tourism. Either by giving adventurous tourists a chance to be closer to a live active volcano, or providing a place with hot and mineral-rich water for tourists to relax in, volcanoes are able to provide such amenities to local communities living near volcanoes, and subsequently generating income for them through attracting tourists. For example, hot springs are the result of interaction between groundwater and active volcano. In Japan, the volcanoes seen in Figure 1.1 shows that the volcanoes while active, haven't erupted in thousands of years. This could be a reason why the locals might have chosen to convert this volcanic activity into a tourism hotspot. Similarly, also seen in Figure 1.1, places with active volcano eruptions like Mount Kilauea in Hawaii and White Island volcano in New Zealand offer volcano tourism, such as lava boat tours or helicopter trips (Ng, 2021). This sort of niche tourism does bring in a source of income to the locals.
+
+To summarize why humans choose to put up with the potential destructive force of volcanoes, it does seem like the monetary and environmental benefits they bring about to the locals supersede it.  
+
+
+
+##  Volcanic eruptions impact on the climate; How significant is the cooling effect of volcanic eruptions?
+
+### Introduction  
+Besides the destructive impact that volcanoes have on their immediate surroundings, a less common tidbit of knowledge is that volcano eruptions have a negative impact towards the climate, also known as global cooling. It is mainly due to emission of volcanic gas, which contains sulfur dioxide that reacts with water vapour and other chemicals in the atmosphere to form sulphur-based particles. Unknown to the effects of global cooling, as more attention has been paid towards global warming in current times, this has piqued our interest in studying the significance of volcanic eruptions in global cooling. From the dataset, we will be using all columns from ```tree_rings``` and ```sulfur``` table, together with ```start_year``` and ```vei``` under the ```eruptions``` table. We first intend to study the relationship between temperature, specifically European temperature, and the number of eruptions that occurred during the 20th century (year 1900 - 2000). Moving on to study the period of 536AD - 550AD, and to see if the sulfur gases spewed from volcanic eruptions played a part in causing the low climate temperatures experienced during this period.
+
+
+### Methodology  
+We will be using ```tree_rings```, ```sulfur``` and ```eruptions```. Due to the smaller dataset provided for ```sulfur```, the ```year``` for ```tree_rings``` had to be filtered to match the years provided in ```sulfur```, which is from year 500-705. As there were no need for the incomplete data in ```sulfur```, that being the missing ```year``` or ```neem``` columns even though there were existing ```wdc``` data, we omitted all rows after year 705.  
+
+In Figure 2.1, it consists of 2 line graphs, with their respective regression line. Narrowing down the time period to the 20th century, the x-axis represents the year, from 1900 - 2000, and the y-axis for the red and blue line graphs represents the Europe temperature index and total number of eruptions recorded respectively. The Europe temperature index is measured in celsius relative to year 1961 to 1990. The regression line is plotted using the Loess method to represent the general trend of the European temperature and number of eruptions over the years. To find out the effects of volcanic eruption on temperature, we decided to look over a long period of time, and decided on the 20th century, from 1900 to 2000. We decided to use this time period as this is when most eruptions were recorded based on the various methods used, and that volcanic eruptions of the distant past might not have been discovered or recorded. Lastly, to determine the extent of cooling effect that volcanic eruptions might have on the climate, we simply have to plot 2 graphs of temperature and number of eruptions against time to visualise the relationship between the 2, hence the respective variables.
+
+In Figure 2.2, is it a combination of a line graph, scatter plot, and a regression line. The x-axis represents the year, from 500AD to 705AD. The line graph represents how the amount of sulfur detected in both Antarctica and Greenland changes over the years during this period as indicated by the y-axis on the right.  All values on the y-axis have been divided by 100 in order to scale the line graph down. Meanwhile, the scatter plot represents all the z-scores of tree rings during the time period as indicated by the y-axis on the left. The z-scores are relative to the time period 1000AD - 1099AD. The regression line is plotted using the Loess method, and represents the general trend of how the z-score of the tree rings changes over time. We felt that it would be best to use a line graph to represent sulfur, as we wanted to display how sulfur content changes with time. In particular, we are looking for sharp spikes in sulfur content, which the line graph is capable of showing. At the same time, since there are many data points provided for sulfur within the period of 500AD to 705AD, plotting sulfur as bar graphs or scattered points would only result in a cluster of data points, which does not clearly display anything meaningful. The z-scores are represented as a scatter plot together with a regression line because we wanted to see the general trend of how the z-score changes with time. This would allow us to identify the relationship between sulfur content and tree ring z-scores. We also drew 2 dotted lines, at x=530 and x=550, and then greyed out the area in between, in order to place more emphasis on the time period that we are studying, that is, 530AD to 550AD. The reason why we plotted sulfur is because volcanoes emit sulfur when they erupt and hence would be indicative of the world’s volcanic activity for that year.  In particular, higher sulfur content detected would mean a greater contribution from volcano eruptions. We use the z-score of tree rings as they are an indicator of the changes in global temperatures. In particular, the lower the z-score of tree-rings, the cooler the climate. Hence, this graph intends to see if any increase in sulfur, and by extension, volcanic activity, caused a decrease in the z-score of tree rings and resulting in a stronger cooling effect on the global climate.
+
+### Visualizations
+
+#### Figure 2.1
+```{r q2f1}
+fig21 = ggplot() +
+  geom_point(tree_rings1900, 
+             mapping = aes(x = year, y = europe_temp_index, color = 'EU Temp Index'),alpha = 0.2) +
+  geom_point(eruptions1900, 
+             mapping = aes(x = start_year, y = erupt_count/10, color = 'Number of Eruption'), alpha = 0.2) +
+  geom_line(tree_rings1900, 
+            mapping = aes(x = year, y = europe_temp_index, color = 'EU Temp Index'), alpha = 0.2) +
+  geom_smooth(tree_rings1900, 
+              mapping = aes(x = year, y = europe_temp_index, color = 'EU Temp Index'), span = 0.6) +
+  geom_line(eruptions1900, 
+            mapping = aes(x = start_year, y = erupt_count/10, color = 'Number of Eruption'), alpha = 0.2) +
+  geom_smooth(eruptions1900, 
+              mapping = aes(x = start_year, y = erupt_count/10, color = 'Number of Eruption'), span = 0.6) +
+  scale_y_continuous(name = 'EU Temp Index', sec.axis=sec_axis(~.*10+30,name='Number of Eruption')) +
+  scale_color_manual(values = c('red','blue')) +
+  labs(title = 'Relationship between Number of Eruptions and Temperature',
+       x = 'Year', y = 'Europe Temperature Index') +
+  theme_classic() + theme(plot.title = element_text(hjust = 0.5), legend.position = "bottom")
+
+fig21
+```
+
+#### Figure 2.2
+```{r q2f2}
+fig22 = ggplot(data=tree_rings_and_sulfur,aes(x=year)) +
+  geom_point(aes(y=n_tree)) +
+  geom_line(data=sulfur_edited,aes(x=year,y=total), size = 0.7, col = 'darkgreen') +
+  geom_smooth(data=tree_rings_and_sulfur,aes(x=year,y=n_tree)) +
+  scale_y_continuous(name = 'Tree Ring Z Score', sec.axis=sec_axis(~.,name='Sulfur Detected (ng/100 /g)')) +
+  geom_vline(aes(xintercept=530),linetype=2,size=0.3) +
+  geom_vline(aes(xintercept=550),linetype=2,size=0.3) +
+  geom_vline(aes(xintercept = 536), linetype = 2, size = 0.3, col = 'red') +
+  geom_text(aes(x=536, label = "Year 536", y =-2.6), col = 'red', angle = 90) +
+  annotate("rect",xmin=530,xmax=550,ymin=-3.5,ymax=2,alpha=.3) +
+  geom_text(aes(x=600, label = "Sulfur Detected", y = 1), col = 'darkgreen') +
+  labs(x = 'Year', title = 'Relationship between Total sulfur detected and Tree Rings Z Score from year 500 - 705') +
+  theme_minimal()
+
+fig22
+```
+
+### Discussions
+
+As evident from Figure 2.1, there happens to be an inverse relationship between Europe temperature index and the number of eruptions that happened throughout the century. This could be explained by the fact that when a volcano erupts, it releases sulfur dioxide into the surroundings to form sulfuric acid aerosols, which are able to persist in the atmosphere for up to 3 years. These aerosols will then block out some of the sun’s incoming radiation, which in turn, causes cooling (Zielinski, 2015). However, due to the lack of certain data, we are unable to determine the extent of cooling for each eruption, as the emission of sulfur dioxide is also dependent on other factors, such as the VEI or magnitude of the eruption. Despite the lack of such data, we are still able to infer from the graph that there is a correlation between temperature and the number of eruptions. 
+
+The climate, particularly temperature, would affect the tree-ring z-score, such that it will grow thinner in years that are colder and drier (Stoller-Conrad, 2017).  Together with the knowledge that volcanic eruptions releases sulfur particles as well, we decided to delve a little deeper into this topic by looking at the relationship between the tree-ring z-score and sulfur detected from the ice cores located at both Greenland and Antarctica, with the tree-ring z-score as an indication of the change in temperature during that time period.
+
+As can be seen from Figure 2.2, the z-score of tree-rings ranges from 0 to -1 at the start of the year 530AD. The z-score measures the deviation of the widths of the tree rings from the average width. The sulfur detected and the spread of z-score of tree-rings were relatively stable then. However, in the year 536AD, we see the largest spike in sulfur detected ever recorded throughout the period, and correspondingly, the lowest z-score ever recorded in that period. This would mean that during the year 536AD, the world possibly experienced one of the worst cooling periods. Coupled with the findings from Figure 2.1, the large amount of sulfur detected would lend credence to the fact that volcanic activity contributed significantly to this cooling effect experienced by the world. This is consistent with our knowledge that a cataclysmic volcanic eruption occurred in the world, which resulted in the volcanic winter of 536AD (Larsen et al., 2008). Subsequently, we also see that the z-score of tree rings continues decreasing and deviating from the average after the year 536AD, which shows the lasting impact that the volcanic eruption of 536AD had. This cataclysmic volcano eruption is the likely reason for the observed trend. Thus, from our observations, we are able to conclude that with the expulsion of sulfur particles from volcanic eruptions, eruptions will indeed affect our climate, causing it to cool. The significance of this cooling would then depend on how large the eruption was, and history has proven that it can be extremely drastic even though it is insignificant in recent years.
+
+
+
+## Reference
+
+1. Data Source: Our data source is from The TidyTuesday Project. Link to the dataset: https://github.com/rfordatascience/tidytuesday/tree/master/data/2020/2020-05-12
+
+2. Mohammed Masum and Md. Ali Akbar (2019) IOP Conf. Ser.: Earth Environ. Sci. 249 012020, https://iopscience.iop.org/article/10.1088/1755-1315/249/1/012020/pdf
+
+3. Antics, M., & Sanner, B. (2007, May). Status of geothermal energy use and resources in Europe. In Proceedings European geothermal congress (Vol. 2). http://sanner-online.de/media/final$20paper$20country$20update$20overview.pdf
+
+4. Ng, R. (2021, April 2). Volcano tourism is booming, but is it too risky? Retrieved from National Geographic: https://www.nationalgeographic.com/travel/article/is-volcano-tourism-safe
+
+5. Larsen, L. B., Vinther, B. M., Briffa, K. R., Melvin, T. M., Clausen, H. B., Jones, P. D., Siggaard-Andersen, M.-L., Hammer, C. U., Eronen, M., Grudd, H., Gunnarson, B. E., Hantemirov, R. M., Naurzbaev, M. M., & Nicolussi, K. (2008). New ice core evidence for a volcanic cause of the A.D. 536 dust veil. Geophysical Research Letters, 35(4). https://doi.org/10.1029/2007gl032450 
+
+6. Zielinski, S. (2015, July 8). Sixth-century misery tied to not one, but two, volcanic eruptions. Smithsonian.com. Retrieved April 17, 2022, from https://www.smithsonianmag.com/science-nature/sixth-century-misery-tied-not-one-two-volcanic-eruptions-180955858/ 
+
+7. Stoller-Conrad, J. (2017, January 27). Tree rings provide snapshots of Earth’s past climate - climate change: Vital signs of the planet. NASA. Retrieved April 17, 2022, from https://climate.nasa.gov/news/2540/tree-rings-provide-snapshots-of-earths-past-climate/
+
